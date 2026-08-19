@@ -7,7 +7,7 @@ import { InventoryModule } from './inventory/inventory.module'; // Ensure this o
     TypeOrmModule.forRoot({
       type: 'mysql',
       host: process.env.DB_HOST,
-      port: 16036,
+      port: Number(process.env.DB_PORT),
       username: 'avnadmin',
       password: process.env.DB_PASSWORD,
       database: 'defaultdb',
