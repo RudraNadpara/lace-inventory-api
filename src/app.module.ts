@@ -6,13 +6,16 @@ import { InventoryModule } from './inventory/inventory.module'; // Ensure this o
   imports: [
     TypeOrmModule.forRoot({
       type: 'mysql',
-      host: 'localhost',
-      port: 3306,
-      username: 'root', // Default XAMPP username
-      password: '',     // Default XAMPP password is empty
-      database: 'lace inventory app', // Ensure this matches your phpMyAdmin DB name
+      host: process.env.DB_HOST,
+      port: 16036,
+      username: 'avnadmin',
+      password: process.env.DB_PASSWORD,
+      database: 'defaultdb',
       autoLoadEntities: true,
-      synchronize: false, 
+      synchronize: false,
+      ssl: {
+        rejectUnauthorized: false 
+      }
     }),
     InventoryModule, // Ensure this only appears once in the array
   ],
