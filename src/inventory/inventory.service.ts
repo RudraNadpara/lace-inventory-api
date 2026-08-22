@@ -1,87 +1,100 @@
-import { Injectable, InternalServerErrorException } from '@nestjs/common';
-import { DataSource } from 'typeorm';
+import { Injectable, NotFoundException } from '@nestjs/common';
+import { InjectRepository } from '@nestjs/typeorm';
+import { Repository } from 'typeorm';
+import { DesignCollection } from './entities/design-collection.entity';
+import { DesignColor } from './entities/design-color.entity';
+import { StockLedger } from './entities/stock-ledger.entity';
 
 @Injectable()
 export class InventoryService {
-  constructor(private dataSource: DataSource) {}
+  constructor(
+    @InjectRepository(DesignCollection)
+    private designRepo: Repository<DesignCollection>,
+    @InjectRepository(DesignColor)
+    private colorRepo: Repository<DesignColor>,
+    @InjectRepository(StockLedger)
+    private ledgerRepo: Repository<StockLedger>,
+  ) {}
 
-  // 1. SCAN LOGIC
-  async processScan(barcode: string, type: 'INWARD' | 'OUTWARD', qty: number) {
-    try {
-      const result = await this.dataSource.query(
-        `CALL sp_ProcessInventoryScan(?, ?, ?)`,
-        [barcode, type, qty]
-      );
+  // 1. ENTRY: Save Design and its allowed colors
+  async createDesign(data: { designNo: string; price: number; imageUrl: string; colors: string[] }) {
+    const barcode = `LACE-${data.designNo.toUpperCase()}`; // 1 Label per design
 
-      if (result && result[0] && result[0][0]) {
-        return {
-          success: true,
-          data: result[0][0],
-        };
-      }
+    const design = this.designRepo.create({
+      Barcode: barcode,
+      DesignNo: data.designNo,
+      Price: data.price,
+      ImageURL: data.imageUrl,
+    });
+    await this.designRepo.save(design);
+
+    for (const colorName of data.colors) {
+      const color = this.colorRepo.create({ Barcode: barcode, ColorName: colorName });
+      await this.colorRepo.save(color);
+    }
+    return { message: 'Design saved', barcode };
+  }
+
+  // 2. LABEL: Get Master Designs
+  async getDesigns() {
+    return this.designRepo.find();
+  }
+
+  // 3. SCAN (INFO): Fetch Design details and stock per color for the scanner popup
+  async getDesignInfo(barcode: string) {
+    const design = await this.designRepo.findOne({ where: { Barcode: barcode } });
+    if (!design) throw new NotFoundException('Barcode not found in Master.');
+
+    const colors = await this.colorRepo.find({ where: { Barcode: barcode } });
+    const stockSummary = [];
+
+    // Calculate current stock for each specific color
+    for (const c of colors) {
+      const inward = await this.ledgerRepo.sum('Quantity', { Barcode: barcode, Color: c.ColorName, TransactionType: 'INWARD' }) || 0;
+      const outward = await this.ledgerRepo.sum('Quantity', { Barcode: barcode, Color: c.ColorName, TransactionType: 'OUTWARD' }) || 0;
       
-      throw new Error('No data returned from procedure.');
-    } catch (error: any) {
-      throw new InternalServerErrorException(error.message || 'Transaction failed');
+      stockSummary.push({
+        color: c.ColorName,
+        stock: inward - outward
+      });
     }
+
+    return {
+      designNo: design.DesignNo,
+      price: design.Price,
+      imageUrl: design.ImageURL,
+      colorStock: stockSummary
+    };
   }
 
-  // 2. CREATE DESIGN LOGIC (With Image Upload)
-  async createDesign(designNo: string, color: string, size: string, price: number, barcode: string, imageData: string) {
-    try {
-      await this.dataSource.query(
-        `INSERT INTO DesignCollection (Barcode, DesignNo, Color, PacketSize, Price, ImageData) 
-         VALUES (?, ?, ?, ?, ?, ?)`,
-        [barcode, designNo, color, Number(size), price, imageData]
-      );
-
-      return { success: true, message: `Design ${designNo} added to master.` };
-    } catch (error: any) {
-      if (error.code === 'ER_DUP_ENTRY') {
-        throw new InternalServerErrorException('This Barcode already exists in the system.');
-      }
-      throw new InternalServerErrorException(error.message || 'Failed to save design master.');
-    }
+  // 4. SCAN (ACTION): Save the Inward/Outward transaction
+  async processScan(data: { barcode: string; color: string; type: string; qty: number }) {
+    const tx = this.ledgerRepo.create({
+      Barcode: data.barcode,
+      Color: data.color,
+      TransactionType: data.type,
+      Quantity: data.qty
+    });
+    return this.ledgerRepo.save(tx);
   }
 
-  // 3. LIVE LEDGER LOGIC (Updated to include Price)
-  async getLiveLedger() {
-    try {
-      const result = await this.dataSource.query(`
-        SELECT 
-            d.DesignNo, 
-            d.Color, 
-            d.PacketSize AS Size, 
-            d.Price, /* <-- NEW: Fetch the price */
-            d.Barcode,
-            d.ImageData,
-            IFNULL(SUM(CASE WHEN l.TransactionType = 'INWARD' THEN l.Quantity ELSE 0 END), 0) - 
-            IFNULL(SUM(CASE WHEN l.TransactionType = 'OUTWARD' THEN l.Quantity ELSE 0 END), 0) AS LiveStock
-        FROM DesignCollection d
-        LEFT JOIN StockLedger l ON d.Barcode = l.Barcode
-        GROUP BY d.Barcode, d.DesignNo, d.Color, d.PacketSize, d.Price, d.ImageData
-        ORDER BY d.CreatedDate DESC
-      `);
-
-      return { success: true, data: result };
-    } catch (error: any) {
-      throw new InternalServerErrorException(error.message || 'Failed to fetch ledger.');
-    }
+  // 5. LEDGER: Get all rows joined with the DesignNo
+  async getLedger() {
+    return this.ledgerRepo.createQueryBuilder('ledger')
+      .leftJoinAndMapOne('ledger.design', DesignCollection, 'design', 'design.Barcode = ledger.Barcode')
+      .orderBy('ledger.TxDate', 'DESC')
+      .getRawMany(); 
   }
 
-  // 4. PRINT LABELS LOGIC
-  async getRecentDesigns() {
-    try {
-      const result = await this.dataSource.query(`
-        SELECT DesignNo, Color, PacketSize AS Size, Barcode, CreatedDate 
-        FROM DesignCollection 
-        ORDER BY CreatedDate DESC 
-        LIMIT 50
-      `);
+  // 6. LEDGER (EDIT): Update packet quantity
+  async updateLedgerRow(id: number, qty: number) {
+    await this.ledgerRepo.update(id, { Quantity: qty });
+    return { message: 'Quantity updated' };
+  }
 
-      return { success: true, data: result };
-    } catch (error: any) {
-      throw new InternalServerErrorException(error.message || 'Failed to fetch designs.');
-    }
+  // 7. LEDGER (DELETE): Remove accidental scan
+  async deleteLedgerRow(id: number) {
+    await this.ledgerRepo.delete(id);
+    return { message: 'Transaction deleted' };
   }
 }

@@ -1,55 +1,42 @@
-import { Controller, Post, Get, Body, HttpException, HttpStatus } from '@nestjs/common';
+import { Controller, Get, Post, Body, Patch, Param, Delete } from '@nestjs/common';
 import { InventoryService } from './inventory.service';
-
-export class ScanDto {
-  barcode!: string;
-  type!: 'INWARD' | 'OUTWARD';
-  qty!: number;
-}
-
-export class CreateDesignDto {
-  designNo!: string;
-  color!: string;
-  size!: string;
-  price!: number;
-  barcode!: string;
-  imageData?: string;
-}
 
 @Controller('api/inventory')
 export class InventoryController {
   constructor(private readonly inventoryService: InventoryService) {}
 
-  @Post('scan')
-  async handleScan(@Body() body: ScanDto) {
-    if (!body.barcode || !body.type || !body.qty) {
-      throw new HttpException('Missing required fields', HttpStatus.BAD_REQUEST);
-    }
-    return await this.inventoryService.processScan(body.barcode, body.type, body.qty);
-  }
-
   @Post('design')
-  async createDesign(@Body() body: CreateDesignDto) {
-    if (!body.designNo || !body.barcode) {
-      throw new HttpException('Design No and Barcode are required.', HttpStatus.BAD_REQUEST);
-    }
-    return await this.inventoryService.createDesign(
-      body.designNo,
-      body.color || '',
-      body.size || '',
-      body.price || 0.00,
-      body.barcode,
-      body.imageData || '' // Pass it to the service
-    );
-  }
-
-  @Get('ledger')
-  async getLedger() {
-    return await this.inventoryService.getLiveLedger();
+  createDesign(@Body() body: { designNo: string; price: number; imageUrl: string; colors: string[] }) {
+    return this.inventoryService.createDesign(body);
   }
 
   @Get('designs')
-  async getDesigns() {
-    return await this.inventoryService.getRecentDesigns();
+  getDesigns() {
+    return this.inventoryService.getDesigns();
+  }
+
+  @Get('scan/:barcode')
+  getDesignInfo(@Param('barcode') barcode: string) {
+    return this.inventoryService.getDesignInfo(barcode);
+  }
+
+  @Post('scan')
+  processScan(@Body() body: { barcode: string; color: string; type: string; qty: number }) {
+    return this.inventoryService.processScan(body);
+  }
+
+  @Get('ledger')
+  getLedger() {
+    return this.inventoryService.getLedger();
+  }
+
+  @Patch('ledger/:id')
+  updateLedger(@Param('id') id: string, @Body('qty') qty: number) {
+    return this.inventoryService.updateLedgerRow(Number(id), qty);
+  }
+
+  @Delete('ledger/:id')
+  deleteLedger(@Param('id') id: string) {
+    return this.inventoryService.deleteLedgerRow(Number(id));
   }
 }
