@@ -39,4 +39,9 @@ export class InventoryController {
   deleteLedger(@Param('id') id: string) {
     return this.inventoryService.deleteLedgerRow(Number(id));
   }
+
+  @Get('report')
+  getStockReport() {
+    return this.inventoryService.getStockReport();
+  }
 }

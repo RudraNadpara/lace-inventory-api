@@ -97,4 +97,19 @@ export class InventoryService {
     await this.ledgerRepo.delete(id);
     return { message: 'Transaction deleted' };
   }
+
+  // 8. REPORT: Get current stock summary grouped by Design and Color
+  async getStockReport() {
+    return this.ledgerRepo.createQueryBuilder('ledger')
+      .select('design.DesignNo', 'designNo')
+      .addSelect('ledger.Color', 'color')
+      .addSelect('design.Price', 'price')
+      .addSelect("SUM(CASE WHEN ledger.TransactionType = 'INWARD' THEN ledger.Quantity ELSE 0 END) - SUM(CASE WHEN ledger.TransactionType = 'OUTWARD' THEN ledger.Quantity ELSE 0 END)", 'currentStock')
+      .leftJoin(DesignCollection, 'design', 'design.Barcode = ledger.Barcode')
+      .groupBy('design.DesignNo')
+      .addGroupBy('ledger.Color')
+      .addGroupBy('design.Price')
+      .orderBy('design.DesignNo', 'ASC')
+      .getRawMany();
+  }
 }
